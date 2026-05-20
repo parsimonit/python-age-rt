@@ -1,0 +1,15 @@
+dist/
+.venv/
+.devbox/
+__pycache__/
+*.egg-info/
+*.pyc
+.pytest_cache/
+.coverage
+.mypy_cache/
+.ruff_cache/
+build/
+nogit/
+.vscode/
+devbox.lock
+.specstory/

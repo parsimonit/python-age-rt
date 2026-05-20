@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "age-rt"
+version = "0.1.0"
+description = "A minimalistic Python implementation of age-encryption.org including an unofficial real-time variant."
+authors = [{name = "Johannes Dröge", email = "p5p129dw@parsimonit.com"}]
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+keywords = ["encryption", "age", "streaming", "cryptography", "real-time"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "cryptography>=41.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/parsimonit/python-age-rt"
+Documentation = "https://github.com/parsimonit/python-age-rt#readme"
+Issues = "https://github.com/parsimonit/python-age-rt/issues"
+Changelog = "https://github.com/parsimonit/python-age-rt/releases"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "poethepoet>=0.24.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/age_rt.py"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/py.typed" = "py.typed"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/age_rt.py", "src/py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+# Relax strictness for v0.1.0 - avoid None/Optional false positives
+check_untyped_defs = false
+warn_redundant_casts = true
+warn_unused_ignores = false
+
+[tool.poe.tasks]
+linter-check = "ruff check src/ tests/"
+format-check = "ruff format --check src/ tests/"
+type-check = "mypy src/age_rt.py"
+pytest = "pytest tests/ -v --cov=src --cov-report=term"
+checkall = ["linter-check", "format-check", "type-check", "pytest"]
