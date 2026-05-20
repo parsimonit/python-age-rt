@@ -9,7 +9,7 @@ age-rt v0.2 features:
 - Variable-length chunks with authentication
 - ChaCha20-Poly1305 AEAD encryption
 - HKDF-based payload key derivation (info="payload")
-- age v1 PSK header format with scrypt
+- age v1 scrypt header format
 - Truncation detection via final flag in nonce
 
 Wire format:
@@ -78,9 +78,8 @@ except PackageNotFoundError:
 # ============================================================================
 
 _AGE_IDENTIFIER = "age-encryption.org/v1"
-_AGE_RT_IDENTIFIER = "github.com/parsimonit/age-rt-encryption"
-_AGE_FILE_KEY_SIZE = 16  # age v1: 128-bit file key
-_AGE_RT_FILE_KEY_SIZE = 32  # age-rt: 256-bit file key
+_AGE_RT_IDENTIFIER = "github.com/parsimonit/age-rt-encryption/v0.2"
+_AGE_FILE_KEY_SIZE = 16  # age v1 and age-rt: 128-bit file key
 CHUNK_SIZE = 65536  # Standard age chunk size (64 KiB)
 _MAX_CHUNK_SIZE = 16 * 1024 * 1024  # 16 MiB absolute maximum for DoS protection
 
@@ -155,7 +154,7 @@ class StreamTruncatedError(DecodeError):
 
 
 def _derive_file_key_from_passphrase(passphrase: str, salt: bytes, scrypt_context: bytes) -> bytes:
-    """Derive 32-byte wrap key via scrypt. scrypt_context = identifier.encode() + b'/scrypt'."""
+    """Derive 32-byte wrap key via scrypt."""
     if len(salt) != 16:
         raise ValueError("Salt must be 16 bytes")
     kdf = Scrypt(
@@ -187,15 +186,15 @@ def _unwrap_file_key(
         raise ChunkAuthenticationError(f"Failed to unwrap file key (wrong passphrase?): {e}")
 
 
-def _encode_age_psk_header(
+def _encode_age_scrypt_header(
     passphrase: str, file_key: bytes, scrypt_salt: bytes, identifier: str
 ) -> bytes:
     """
-    Encode age-format PSK header with scrypt stanza and HMAC.
+    Encode age-format scrypt header stanza and HMAC.
 
     Returns complete header bytes: identifier + stanza + "--- <mac>\n"
     """
-    scrypt_context = identifier.encode("ascii") + b"/scrypt"
+    scrypt_context = b"age-encryption.org/v1/scrypt"
     wrapped_key = _wrap_file_key(file_key, passphrase, scrypt_salt, scrypt_context)
     salt_b64 = _b64_encode(scrypt_salt)
     body_b64 = _b64_encode_wrapped(wrapped_key)
@@ -207,23 +206,6 @@ def _encode_age_psk_header(
     )
     mac = _hmac.new(hmac_key, header_no_mac, _hashlib.sha256).digest()
     return header_no_mac + b" " + _b64_encode(mac).encode("ascii") + b"\n"
-
-
-def _decode_age_psk_header(
-    header_bytes: bytes, passphrase: str, expected_base_identifier: str
-) -> tuple[bytes, dict[str, int]]:
-    """
-    Decode age-format PSK header: verify HMAC, parse stanza, unwrap file key.
-    Thin wrapper around _parse_header_bytes + _scrypt_unwrap.
-    """
-    parsed = _parse_header_bytes(header_bytes)
-    if parsed.base_id != expected_base_identifier:
-        raise HeaderParseError(
-            f"Invalid header identifier: expected '{expected_base_identifier}', "
-            f"got '{parsed.base_id}'"
-        )
-    file_key = _scrypt_unwrap(parsed, passphrase)
-    return file_key, parsed.params
 
 
 def _make_aead_nonce(chunk_index: int, is_final: bool) -> bytes:
@@ -391,7 +373,7 @@ def _scrypt_unwrap(parsed: _Header, passphrase: str) -> bytes:
         raise HeaderParseError(f"Invalid scrypt salt: {e}")
     if len(scrypt_salt) != 16:
         raise HeaderParseError("Scrypt salt must be 16 bytes")
-    scrypt_context = parsed.full_identifier.encode("ascii") + b"/scrypt"
+    scrypt_context = b"age-encryption.org/v1/scrypt"
     file_key = _unwrap_file_key(parsed.stanza_body, passphrase, scrypt_salt, scrypt_context)
     hmac_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"header").derive(
         file_key
@@ -435,7 +417,7 @@ class AgeRTEncoder:
     age-rt v0.2 stream encoder.
 
     Encodes plaintext chunks into age-rt wire format with authentication.
-    Supports passphrase-based encryption with age v1 PSK headers.
+    Supports passphrase-based encryption with age v1 scrypt headers.
 
     Do not instantiate directly. Use factory methods:
     - AgeRTEncoder.from_passphrase("secret")
@@ -453,15 +435,15 @@ class AgeRTEncoder:
         Internal constructor. Use from_passphrase() instead.
 
         Args:
-            _file_key: 32-byte file key (internal)
+            _file_key: 16-byte file key (internal)
             _age_header: Pre-encoded age header bytes (internal)
             _max_chunk_size: Maximum chunk size in bytes (internal)
 
         Raises:
-            ValueError: If file_key is not 32 bytes or max_chunk_size is invalid
+            ValueError: If file_key is not 16 bytes or max_chunk_size is invalid
         """
-        if len(_file_key) != _AGE_RT_FILE_KEY_SIZE:
-            raise ValueError(f"File key must be {_AGE_RT_FILE_KEY_SIZE} bytes")
+        if len(_file_key) != _AGE_FILE_KEY_SIZE:
+            raise ValueError(f"File key must be {_AGE_FILE_KEY_SIZE} bytes")
         if _max_chunk_size < 1 or _max_chunk_size > _MAX_CHUNK_SIZE:
             raise ValueError(f"max_chunk_size must be 1..{_MAX_CHUNK_SIZE}")
 
@@ -476,7 +458,7 @@ class AgeRTEncoder:
     @classmethod
     def from_passphrase(cls, passphrase: str, max_chunk_size: int = CHUNK_SIZE) -> "AgeRTEncoder":
         """
-        Create encoder from passphrase with age PSK header.
+        Create encoder from passphrase with age scrypt header.
 
         Generates random file key and scrypt salt internally.
 
@@ -494,7 +476,7 @@ class AgeRTEncoder:
         if max_chunk_size < 1 or max_chunk_size > _MAX_CHUNK_SIZE:
             raise ValueError(f"max_chunk_size must be 1..{_MAX_CHUNK_SIZE}")
 
-        file_key = os.urandom(_AGE_RT_FILE_KEY_SIZE)
+        file_key = os.urandom(_AGE_FILE_KEY_SIZE)
         scrypt_salt = os.urandom(16)
 
         # Build identifier (omit param if standard)
@@ -503,7 +485,7 @@ class AgeRTEncoder:
         else:
             identifier = _build_identifier(_AGE_RT_IDENTIFIER, maxchunk=max_chunk_size)
 
-        age_header = _encode_age_psk_header(passphrase, file_key, scrypt_salt, identifier)
+        age_header = _encode_age_scrypt_header(passphrase, file_key, scrypt_salt, identifier)
         return cls(_file_key=file_key, _age_header=age_header, _max_chunk_size=max_chunk_size)
 
     @property
@@ -793,7 +775,7 @@ class AgeEncoder:
     @classmethod
     def from_passphrase(cls, passphrase: str, chunk_size: int = CHUNK_SIZE) -> "AgeEncoder":
         """
-        Create encoder from passphrase with age PSK header.
+        Create encoder from passphrase with age scrypt header.
 
         Args:
             passphrase: User passphrase
@@ -818,7 +800,7 @@ class AgeEncoder:
         else:
             identifier = _build_identifier(_AGE_IDENTIFIER, chunk=chunk_size)
 
-        age_header = _encode_age_psk_header(passphrase, file_key, scrypt_salt, identifier)
+        age_header = _encode_age_scrypt_header(passphrase, file_key, scrypt_salt, identifier)
         return cls(_file_key=file_key, _age_header=age_header, _chunk_size=chunk_size)
 
     @property

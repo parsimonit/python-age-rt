@@ -55,7 +55,7 @@ def test_corrupted_header_base64(passphrase):
     """Test that corrupted base64 in header raises error."""
     # Create a header with invalid base64
     # Use correct age-rt identifier
-    bad_header = b"""github.com/parsimonit/age-rt-encryption
+    bad_header = b"""github.com/parsimonit/age-rt-encryption/v0.2
 -> scrypt !!!INVALID_BASE64!!! 18
 AAAAAAAAAAAAAAAAAAAAA
 ---
@@ -71,7 +71,7 @@ def test_corrupted_scrypt_stanza_wrong_args(passphrase):
     """Test that scrypt stanza with wrong number of args raises error."""
     # Create a header with wrong scrypt args (missing work factor)
     # Use correct age-rt identifier
-    bad_header = b"""github.com/parsimonit/age-rt-encryption
+    bad_header = b"""github.com/parsimonit/age-rt-encryption/v0.2
 -> scrypt AAAAAAAAAAAAAAAAAAAAAA
 AAAAAAAAAAAAAAAAAAAAA
 ---
@@ -87,13 +87,13 @@ def test_corrupted_scrypt_work_factor(passphrase):
     """Test that invalid scrypt work factor raises HeaderParseError."""
     import os
 
-    from age_rt import _AGE_RT_IDENTIFIER, _encode_age_psk_header
+    from age_rt import _AGE_RT_IDENTIFIER, _encode_age_scrypt_header
 
     # We need to manually create a header with wrong work factor
-    # This is tricky because _encode_age_psk_header uses correct work factor
+    # This is tricky because _encode_age_scrypt_header uses correct work factor
     # Let's modify a valid header - use age-rt identifier
-    valid_header = _encode_age_psk_header(
-        passphrase, os.urandom(32), os.urandom(16), _AGE_RT_IDENTIFIER
+    valid_header = _encode_age_scrypt_header(
+        passphrase, os.urandom(16), os.urandom(16), _AGE_RT_IDENTIFIER
     )
 
     # Replace work factor 18 with 17
@@ -152,7 +152,7 @@ def test_decoder_insufficient_data(passphrase):
 
 def test_malformed_header_no_footer(passphrase):
     """Test that header without MAC footer raises error."""
-    bad_header = b"""github.com/parsimonit/age-rt-encryption
+    bad_header = b"""github.com/parsimonit/age-rt-encryption/v0.2
 -> scrypt AAAAAAAAAAAAAAAAAAAAAA 18
 AAAAAAAAAAAAAAAAAAAAA
 """
@@ -168,7 +168,7 @@ def test_header_too_large():
     """Test that excessively large header is rejected."""
     # Create a header that's too large (> 4096 bytes)
     passphrase = "test"
-    huge_header = b"github.com/parsimonit/age-rt-encryption\n"
+    huge_header = b"github.com/parsimonit/age-rt-encryption/v0.2\n"
     huge_header += b"-> scrypt " + b"A" * 5000 + b" 18\n"
     huge_header += b"AAAA\n---\n"
 

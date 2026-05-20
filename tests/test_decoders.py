@@ -179,9 +179,9 @@ def test_age_auto_decoder_unknown_identifier(passphrase):
     """AgeAutoDecoder: raises HeaderParseError for unknown format identifier."""
     import os
 
-    from age_rt import _encode_age_psk_header
+    from age_rt import _encode_age_scrypt_header
 
-    wire = _encode_age_psk_header(passphrase, os.urandom(32), os.urandom(16), "unknown.example/v1")
+    wire = _encode_age_scrypt_header(passphrase, os.urandom(16), os.urandom(16), "unknown.example/v1")
 
     with pytest.raises(HeaderParseError, match="Unknown format identifier"):
         list(iter_decode_callable(io.BytesIO(wire).read, AgeAutoDecoder(passphrase)))
