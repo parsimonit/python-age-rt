@@ -32,7 +32,7 @@ The test suite is split into the following modules:
   - Integration with real file operations
 
 - **`test_async.py`** - Minimal smoke tests for async functions
-  - `aiter_encode()` - Async chunk encoding
+  - `aiter_encode_chunks()` - Async chunk encoding
   - `aiter_decode_callable()` - Async callable decoding
   - `aiter_decode_chunks()` - Async chunk decoding
 

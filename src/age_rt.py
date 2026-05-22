@@ -1123,7 +1123,7 @@ def iter_encode_chunks(
         yield encoder.encode_chunk(b"", is_final=True)
 
 
-async def aiter_encode(
+async def aiter_encode_chunks(
     chunks: AsyncIterable[bytes],
     encoder: "AgeRTEncoder | AgeEncoder",
 ) -> AsyncIterator[bytes]:

@@ -87,7 +87,7 @@ The module provides:
   - `AgeAutoDecoder`: Auto-detecting decoder — handles both age v1 and age-rt streams
 
 - **High-level iterator functions**:
-  - `iter_encode_chunks()` / `aiter_encode()`: Sync/async encoding iterators
+  - `iter_encode_chunks()` / `aiter_encode_chunks()`: Sync/async encoding iterators
   - `iter_decode_callable()` / `aiter_decode_callable()`: Decode from read functions
   - `iter_decode_chunks()` / `aiter_decode_chunks()`: Decode from chunk iterables
 
@@ -247,7 +247,7 @@ for wire_chunk in iter_encode_chunks([b"chunk1", b"chunk2"], encoder):
 ---
 
 ```python
-async aiter_encode(chunks: AsyncIterable[bytes], encoder: AgeRTEncoder | AgeEncoder) -> AsyncIterator[bytes]
+async aiter_encode_chunks(chunks: AsyncIterable[bytes], encoder: AgeRTEncoder | AgeEncoder) -> AsyncIterator[bytes]
 ```
 
 Async version of `iter_encode_chunks()` for async chunk sources.
@@ -485,7 +485,7 @@ Encoders use `from_passphrase()` rather than direct instantiation:
 
 ### Sync-First with Async Support
 
-The core decoder is synchronous; `feed()` returns `bytes | None`, not a coroutine. Async support is provided by thin async generator wrappers (`aiter_decode_callable`, `aiter_decode_chunks`, `aiter_encode`).
+The core decoder is synchronous; `feed()` returns `bytes | None`, not a coroutine. Async support is provided by thin async generator wrappers (`aiter_decode_callable`, `aiter_decode_chunks`, `aiter_encode_chunks`).
 
 ### Empty Chunks Are Preserved
 

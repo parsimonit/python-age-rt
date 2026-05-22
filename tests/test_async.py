@@ -9,7 +9,7 @@ from age_rt import (
     AgeRTEncoder,
     aiter_decode_callable,
     aiter_decode_chunks,
-    aiter_encode,
+    aiter_encode_chunks,
 )
 
 
@@ -20,12 +20,12 @@ async def async_chunk_source(chunks):
 
 
 @pytest.mark.asyncio
-async def test_aiter_encode_age_rt(passphrase, sample_chunks):
-    """Test aiter_encode with age-rt format."""
+async def test_aiter_encode_chunks_age_rt(passphrase, sample_chunks):
+    """Test aiter_encode_chunks with age-rt format."""
     encoder = AgeRTEncoder.from_passphrase(passphrase)
 
     wire_chunks = []
-    async for wire_chunk in aiter_encode(async_chunk_source(sample_chunks), encoder):
+    async for wire_chunk in aiter_encode_chunks(async_chunk_source(sample_chunks), encoder):
         wire_chunks.append(wire_chunk)
 
     # Should produce header + encoded chunks
@@ -40,13 +40,13 @@ async def test_aiter_encode_age_rt(passphrase, sample_chunks):
 
 
 @pytest.mark.asyncio
-async def test_aiter_encode_age_v1(passphrase, large_chunk):
-    """Test aiter_encode with age v1 format."""
+async def test_aiter_encode_chunks_age_v1(passphrase, large_chunk):
+    """Test aiter_encode_chunks with age v1 format."""
     encoder = AgeEncoder.from_passphrase(passphrase)
     chunks = [large_chunk, b"tail"]
 
     wire_chunks = []
-    async for wire_chunk in aiter_encode(async_chunk_source(chunks), encoder):
+    async for wire_chunk in aiter_encode_chunks(async_chunk_source(chunks), encoder):
         wire_chunks.append(wire_chunk)
 
     wire = b"".join(wire_chunks)
