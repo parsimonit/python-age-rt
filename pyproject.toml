@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "age-rt"
-version = "0.2.1"
+version = "0.2.2"
 description = "A minimalistic Python implementation of age-encryption.org including an unofficial real-time variant."
 authors = [{name = "Johannes Dröge", email = "p5p129dw@parsimonit.com"}]
 readme = "README.md"
