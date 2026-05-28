@@ -136,3 +136,59 @@ async def test_aiter_decode_chunks_empty_source(passphrase):
     with pytest.raises(StreamTruncatedError):
         async for _ in aiter_decode_chunks(empty_source(), AgeRTDecoder(passphrase)):
             pass
+
+
+@pytest.mark.asyncio
+async def test_aiter_decode_chunks_age_v1(passphrase):
+    """Test aiter_decode_chunks with age v1 format split into small blobs."""
+    from conftest import age_encode
+
+    from age_rt import CHUNK_SIZE
+
+    plaintext = bytes(range(256)) * (CHUNK_SIZE // 256) + b"tail"
+    wire = age_encode(plaintext, passphrase)
+
+    blob_size = 50
+    blobs = [wire[i : i + blob_size] for i in range(0, len(wire), blob_size)]
+
+    decoded = []
+    async for chunk in aiter_decode_chunks(async_chunk_source(blobs), AgeDecoder(passphrase)):
+        decoded.append(chunk)
+
+    assert b"".join(decoded) == plaintext
+
+
+@pytest.mark.asyncio
+async def test_aiter_decode_chunks_trailing_data(passphrase, sample_chunks):
+    """Test that trailing bytes after a valid stream raise DecodeError."""
+    from conftest import age_rt_encode
+
+    from age_rt import DecodeError
+
+    wire = age_rt_encode(sample_chunks, passphrase)
+    blob_size = 50
+    blobs = [wire[i : i + blob_size] for i in range(0, len(wire), blob_size)]
+    blobs.append(b"extra")
+    with pytest.raises(DecodeError):
+        async for _ in aiter_decode_chunks(async_chunk_source(blobs), AgeRTDecoder(passphrase)):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_aiter_decode_chunks_auto_decoder_age_v1(passphrase):
+    """Test aiter_decode_chunks with AgeAutoDecoder on an age v1 stream."""
+    from conftest import age_encode
+
+    from age_rt import CHUNK_SIZE, AgeAutoDecoder
+
+    plaintext = bytes(range(256)) * (CHUNK_SIZE // 256) + b"tail"
+    wire = age_encode(plaintext, passphrase)
+
+    blob_size = 50
+    blobs = [wire[i : i + blob_size] for i in range(0, len(wire), blob_size)]
+
+    decoded = []
+    async for chunk in aiter_decode_chunks(async_chunk_source(blobs), AgeAutoDecoder(passphrase)):
+        decoded.append(chunk)
+
+    assert b"".join(decoded) == plaintext

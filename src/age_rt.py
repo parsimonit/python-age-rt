@@ -397,14 +397,22 @@ class _HeaderParser:
 
     def feed(self, data: bytes) -> _Header | None:
         self._buf.extend(data)
+        if len(self._buf) > 4096:
+            raise HeaderParseError("Header too large (input may not be an age-format stream)")
         if self._buf[-1:] != b"\n":
             return None
         buf = bytes(self._buf)
+        # On the first newline, structurally validate the identifier line:
+        # age identifiers are URL-like paths (contain '/', no spaces).
+        if b"\n" not in buf[:-1]:
+            first_line = buf[:-1]
+            if b" " in first_line or b"/" not in first_line:
+                raise HeaderParseError(
+                    f"Not an age-format stream: invalid identifier {first_line[:60]!r}"
+                )
         last_nl = buf.rfind(b"\n", 0, len(buf) - 1)
         if not buf[last_nl + 1 : -1].startswith(b"--- "):
             return None
-        if len(self._buf) > 4096:
-            raise HeaderParseError("Header too large")
         return _parse_header_bytes(buf)
 
 
@@ -1146,7 +1154,7 @@ async def aiter_encode_chunks(
 
 def iter_decode_callable(
     read_func: Callable[[int], bytes],
-    decoder: "AgeRTDecoder | AgeDecoder",
+    decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
 ) -> Iterator[bytes]:
     """
     Decode from a synchronous read function using the provided decoder.
@@ -1181,7 +1189,7 @@ def iter_decode_callable(
 
 async def aiter_decode_callable(
     read_func: Callable[[int], Awaitable[bytes]],
-    decoder: "AgeRTDecoder | AgeDecoder",
+    decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
 ) -> AsyncIterator[bytes]:
     """
     Decode from an asynchronous read function using the provided decoder.
@@ -1206,79 +1214,142 @@ async def aiter_decode_callable(
             yield result
 
 
+def _feed_decoder_from_buffer(
+    buffer: bytearray,
+    decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
+    source_exhausted: bool,
+) -> bytes | None:
+    """
+    Feed one decoder step from the buffer, handling source exhaustion.
+
+    Normal case (buffer ≥ bytes_wanted): feeds exactly bytes_wanted bytes.
+
+    Exhausted case (buffer < bytes_wanted): attempts a short feed — valid for
+    AgeDecoder's final chunk. AgeRTDecoder raises InsufficientDataError (strict
+    exact-size contract), re-raised as StreamTruncatedError. Also raises
+    StreamTruncatedError if the buffer is empty or the decoder is not done
+    after the short feed.
+
+    Mutates buffer in place. Returns plaintext or None.
+    """
+    needed = decoder.bytes_wanted
+    if source_exhausted and len(buffer) < needed:
+        if not buffer:
+            raise StreamTruncatedError("Source exhausted before decoding complete")
+        data = bytes(buffer)
+        buffer.clear()
+        try:
+            result = decoder.feed(data)
+        except InsufficientDataError:
+            raise StreamTruncatedError("Source exhausted before decoding complete")
+        if not decoder.is_done():
+            raise StreamTruncatedError("Source exhausted before decoding complete")
+        return result
+    data = bytes(buffer[:needed])
+    del buffer[:needed]
+    return decoder.feed(data)
+
+
 def iter_decode_chunks(
     data_source: Iterable[bytes],
-    decoder: "AgeRTDecoder | AgeDecoder",
+    decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
 ) -> Iterator[bytes]:
     """
     Decode from an iterable of byte blobs using the provided decoder.
 
-    Buffers internally to satisfy decoder.bytes_wanted exactly.  Best suited
-    for AgeRTDecoder, where chunk boundaries are determined by length prefixes.
-    For AgeDecoder, prefer iter_decode_callable with a read function that may
-    return short reads at end-of-stream.
+    Buffers internally to satisfy decoder.bytes_wanted exactly.  Works with
+    AgeRTDecoder, AgeDecoder, and AgeAutoDecoder.  When the source is exhausted
+    with a partial buffer, a short feed is attempted so that AgeDecoder can
+    detect its final chunk; AgeRTDecoder's strict-size contract raises
+    InsufficientDataError, which is re-raised as StreamTruncatedError.
+    After decoding completes, any remaining buffered bytes are an error.
 
     Args:
         data_source: Iterable yielding bytes blobs of arbitrary size
-        decoder: A pre-constructed AgeRTDecoder or AgeDecoder instance
+        decoder: A pre-constructed AgeRTDecoder, AgeDecoder, or AgeAutoDecoder instance
 
     Yields:
         Decrypted plaintext chunks
 
     Raises:
         StreamTruncatedError: If source is exhausted before decoding is done
+        DecodeError: If bytes remain in the buffer after decoding completes
     """
     buffer = bytearray()
     source_iter = iter(data_source)
+    source_exhausted = False
 
     while not decoder.is_done():
         needed = decoder.bytes_wanted
-
-        while len(buffer) < needed:
+        while len(buffer) < needed and not source_exhausted:
             try:
                 buffer.extend(next(source_iter))
             except StopIteration:
-                raise StreamTruncatedError("Source exhausted before decoding complete")
-
-        data = bytes(buffer[:needed])
-        del buffer[:needed]
-        if (result := decoder.feed(data)) is not None:
+                source_exhausted = True
+        result = _feed_decoder_from_buffer(buffer, decoder, source_exhausted)
+        if result is not None:
             yield result
+
+    if buffer:
+        raise DecodeError("Unexpected trailing data after end of stream")
+    if not source_exhausted:
+        try:
+            extra = next(source_iter)
+            if extra:
+                raise DecodeError("Unexpected trailing data after end of stream")
+        except StopIteration:
+            pass
 
 
 async def aiter_decode_chunks(
     data_source: AsyncIterable[bytes],
-    decoder: "AgeRTDecoder | AgeDecoder",
+    decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
 ) -> AsyncIterator[bytes]:
     """
     Decode from an async iterable of byte blobs using the provided decoder.
 
+    Buffers internally to satisfy decoder.bytes_wanted exactly.  Works with
+    AgeRTDecoder, AgeDecoder, and AgeAutoDecoder.  When the source is exhausted
+    with a partial buffer, a short feed is attempted so that AgeDecoder can
+    detect its final chunk; AgeRTDecoder's strict-size contract raises
+    InsufficientDataError, which is re-raised as StreamTruncatedError.
+    After decoding completes, any remaining buffered bytes are an error.
+
     Args:
         data_source: Async iterable yielding bytes blobs of arbitrary size
-        decoder: A pre-constructed AgeRTDecoder or AgeDecoder instance
+        decoder: A pre-constructed AgeRTDecoder, AgeDecoder, or AgeAutoDecoder instance
 
     Yields:
         Decrypted plaintext chunks
 
     Raises:
         StreamTruncatedError: If source is exhausted before decoding is done
+        DecodeError: If bytes remain in the buffer after decoding completes
     """
     buffer = bytearray()
     source_iter = aiter(data_source)
+    source_exhausted = False
 
     while not decoder.is_done():
         needed = decoder.bytes_wanted
-
-        while len(buffer) < needed:
+        while len(buffer) < needed and not source_exhausted:
             try:
                 buffer.extend(await anext(source_iter))
             except StopAsyncIteration:
-                raise StreamTruncatedError("Source exhausted before decoding complete")
-
-        data = bytes(buffer[:needed])
-        del buffer[:needed]
-        if (result := decoder.feed(data)) is not None:
+                source_exhausted = True
+        result = _feed_decoder_from_buffer(buffer, decoder, source_exhausted)
+        if result is not None:
             yield result
+
+    if buffer:
+        raise DecodeError("Unexpected trailing data after end of stream")
+    if not source_exhausted:
+        try:
+            extra = await anext(source_iter)
+            if extra:
+                raise DecodeError("Unexpected trailing data after end of stream")
+        except StopAsyncIteration:
+            pass
 
 
 # ============================================================================
@@ -1320,7 +1391,7 @@ def encode_bytes(
 
 def decode_file(
     file: BinaryIO,
-    decoder: "AgeRTDecoder | AgeDecoder",
+    decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
 ) -> Iterator[bytes]:
     """
     Decode from a file-like object.
@@ -1335,7 +1406,7 @@ def decode_file(
 
 def decode_bytes(
     data: bytes,
-    decoder: "AgeRTDecoder | AgeDecoder",
+    decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
 ) -> Iterator[bytes]:
     """
     Decode from a bytes object.

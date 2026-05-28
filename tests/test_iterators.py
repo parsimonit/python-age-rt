@@ -50,25 +50,76 @@ def test_iter_decode_chunks_age_rt(passphrase, sample_chunks):
 
 
 def test_iter_decode_chunks_age_v1(passphrase):
-    """Test iter_decode_chunks with age v1 format."""
+    """Test iter_decode_chunks with age v1 format (single blob)."""
     plaintext = b"Hello from age v1"
     wire = age_encode(plaintext, passphrase)
 
-    # Decode from single chunk
-    from age_rt import StreamTruncatedError
+    decoded = list(iter_decode_chunks([wire], AgeDecoder(passphrase)))
+    assert b"".join(decoded) == plaintext
 
-    try:
-        decoded = list(iter_decode_chunks([wire], AgeDecoder(passphrase)))
-        assert b"".join(decoded) == plaintext
-    except StreamTruncatedError:
-        # May fail if wire is incomplete - use iter_decode_callable instead
-        pass
 
-    # Decode from multiple wire chunks using iter_decode_callable is more reliable
-    import io
+def test_iter_decode_chunks_age_v1_small_blobs(passphrase, large_chunk):
+    """Test iter_decode_chunks with age v1 format split into small blobs."""
+    plaintext = large_chunk + b"tail"
+    wire = age_encode(plaintext, passphrase)
 
-    decoded2 = list(iter_decode_callable(io.BytesIO(wire).read, AgeDecoder(passphrase)))
-    assert b"".join(decoded2) == plaintext
+    blob_size = 50
+    blobs = [wire[i : i + blob_size] for i in range(0, len(wire), blob_size)]
+    decoded = list(iter_decode_chunks(blobs, AgeDecoder(passphrase)))
+    assert b"".join(decoded) == plaintext
+
+
+def test_iter_decode_chunks_trailing_data_age_rt(passphrase, sample_chunks):
+    """Test that trailing bytes after a valid age-rt stream raise DecodeError."""
+    from age_rt import DecodeError
+
+    wire = age_rt_encode(sample_chunks, passphrase)
+    with pytest.raises(DecodeError):
+        list(iter_decode_chunks([wire + b"extra"], AgeRTDecoder(passphrase)))
+
+
+def test_iter_decode_chunks_trailing_data_age_v1(passphrase):
+    """Test that trailing bytes after a valid age v1 stream raise DecodeError."""
+    from age_rt import DecodeError
+
+    wire = age_encode(b"hello", passphrase)
+    with pytest.raises(DecodeError):
+        list(iter_decode_chunks([wire + b"extra"], AgeDecoder(passphrase)))
+
+
+def test_iter_decode_chunks_trailing_data_separate_blob(passphrase, sample_chunks):
+    """Test that trailing bytes arriving as a separate blob also raise DecodeError."""
+    from age_rt import DecodeError
+
+    wire = age_rt_encode(sample_chunks, passphrase)
+    blob_size = 50
+    blobs = [wire[i : i + blob_size] for i in range(0, len(wire), blob_size)]
+    blobs.append(b"extra")
+    with pytest.raises(DecodeError):
+        list(iter_decode_chunks(blobs, AgeRTDecoder(passphrase)))
+
+
+def test_iter_decode_chunks_auto_decoder_age_rt(passphrase, sample_chunks):
+    """Test iter_decode_chunks with AgeAutoDecoder on an age-rt stream."""
+    from age_rt import AgeAutoDecoder
+
+    wire = age_rt_encode(sample_chunks, passphrase)
+    blob_size = 50
+    blobs = [wire[i : i + blob_size] for i in range(0, len(wire), blob_size)]
+    decoded = list(iter_decode_chunks(blobs, AgeAutoDecoder(passphrase)))
+    assert decoded == sample_chunks + [b""]
+
+
+def test_iter_decode_chunks_auto_decoder_age_v1(passphrase, large_chunk):
+    """Test iter_decode_chunks with AgeAutoDecoder on an age v1 stream."""
+    from age_rt import AgeAutoDecoder
+
+    plaintext = large_chunk + b"tail"
+    wire = age_encode(plaintext, passphrase)
+    blob_size = 50
+    blobs = [wire[i : i + blob_size] for i in range(0, len(wire), blob_size)]
+    decoded = list(iter_decode_chunks(blobs, AgeAutoDecoder(passphrase)))
+    assert b"".join(decoded) == plaintext
 
 
 def test_iter_decode_chunks_partial_feeds(passphrase):
