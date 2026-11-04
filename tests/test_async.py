@@ -36,7 +36,7 @@ async def test_aiter_encode_chunks_age_rt(passphrase, sample_chunks):
     from age_rt import decode_bytes
 
     decoded = list(decode_bytes(wire, AgeRTDecoder(passphrase)))
-    assert decoded == sample_chunks + [b""]
+    assert decoded == sample_chunks
 
 
 @pytest.mark.asyncio
@@ -78,7 +78,7 @@ async def test_aiter_decode_callable(passphrase, sample_chunks):
     async for chunk in aiter_decode_callable(async_read, AgeRTDecoder(passphrase)):
         decoded.append(chunk)
 
-    assert decoded == sample_chunks + [b""]
+    assert decoded == sample_chunks
 
 
 @pytest.mark.asyncio
@@ -99,7 +99,7 @@ async def test_aiter_decode_chunks(passphrase, sample_chunks):
     ):
         decoded.append(chunk)
 
-    assert decoded == sample_chunks + [b""]
+    assert decoded == sample_chunks
 
 
 @pytest.mark.asyncio
@@ -192,3 +192,36 @@ async def test_aiter_decode_chunks_auto_decoder_age_v1(passphrase):
         decoded.append(chunk)
 
     assert b"".join(decoded) == plaintext
+
+
+@pytest.mark.asyncio
+async def test_aiter_encode_chunks_age_full_last_chunk_has_no_empty_chunk(passphrase):
+    """A payload that is a multiple of chunk_size must not get a trailing empty chunk."""
+    chunk_size = 16
+    chunks = [b"a" * chunk_size, b"b" * chunk_size]
+    encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=chunk_size)
+
+    wire_chunks = [w async for w in aiter_encode_chunks(async_chunk_source(chunks), encoder)]
+
+    assert all(wire_chunks)  # deferred (empty) encoder output is not yielded
+    body = b"".join(wire_chunks[1:])
+    assert len(body) == 2 * (chunk_size + 16)
+
+    from age_rt import decode_bytes
+
+    decoded = list(decode_bytes(wire_chunks[0] + body, AgeDecoder(passphrase, chunk_size=16)))
+    assert decoded == chunks
+
+
+@pytest.mark.asyncio
+async def test_aiter_encode_chunks_age_rt_heartbeat_roundtrip(passphrase):
+    """Async: an empty non-final chunk (heartbeat) survives; the end-of-stream marker does not."""
+    chunks = [b"a", b"", b"b", b""]
+    encoder = AgeRTEncoder.from_passphrase(passphrase)
+    wire = b"".join([w async for w in aiter_encode_chunks(async_chunk_source(chunks), encoder)])
+
+    decoded = [
+        chunk
+        async for chunk in aiter_decode_chunks(async_chunk_source([wire]), AgeRTDecoder(passphrase))
+    ]
+    assert decoded == chunks

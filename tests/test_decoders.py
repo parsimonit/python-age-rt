@@ -81,7 +81,7 @@ def test_empty_chunk(passphrase):
     output.seek(0)
     decoded = list(iter_decode_callable(output.read, AgeRTDecoder(passphrase)))
 
-    assert decoded == [b"Data", b""]
+    assert decoded == [b"Data"]
 
 
 def test_stateful_decoder(passphrase, sample_chunks):
@@ -104,7 +104,8 @@ def test_stateful_decoder(passphrase, sample_chunks):
         if result is not None:
             decoded.append(result)
 
-    # iter_encode_chunks adds a final empty chunk, so decoded should be chunks + [b'']
+    # iter_encode_chunks terminates the stream with an empty final chunk; direct feed() still
+    # returns it (is_done() is the signal), and the low-level loop above appends it.
     assert decoded == sample_chunks + [b""]
 
 
@@ -172,7 +173,7 @@ def test_age_auto_decoder_age_rt(passphrase, sample_chunks):
     encoder = AgeRTEncoder.from_passphrase(passphrase)
     wire = b"".join(iter_encode_chunks(sample_chunks, encoder))
     recovered = list(iter_decode_callable(io.BytesIO(wire).read, AgeAutoDecoder(passphrase)))
-    assert recovered == sample_chunks + [b""]
+    assert recovered == sample_chunks
 
 
 def test_age_auto_decoder_unknown_identifier(passphrase):
@@ -228,3 +229,38 @@ def test_decoder_feed_after_done(passphrase):
     # Feeding more data after done should raise InsufficientDataError (expected 0 bytes)
     with pytest.raises(InsufficientDataError):
         decoder.feed(b"x")
+
+
+def _legacy_age_stream_with_empty_final(passphrase, chunk_size=16):
+    """Non-canonical stream as written by age-rt <= v0.2.2 (and age < v1.1.0): full chunk
+    followed by an empty final chunk. The encoder can no longer produce it, so build it from
+    the encoder's private chunk primitive."""
+    encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=chunk_size)
+    body = encoder._emit(b"x" * chunk_size, False) + encoder._emit(b"", True)
+    return encoder.get_header() + body
+
+
+def test_age_decoder_rejects_empty_final_chunk_after_payload(passphrase):
+    """age >= v1.1.0: empty final chunk is invalid unless it is the sole chunk."""
+    from age_rt import DecodeError
+
+    wire = _legacy_age_stream_with_empty_final(passphrase)
+    with pytest.raises(DecodeError, match="empty final chunk"):
+        list(iter_decode_callable(io.BytesIO(wire).read, AgeDecoder(passphrase, chunk_size=16)))
+
+
+def test_age_auto_decoder_rejects_empty_final_chunk_after_payload(passphrase):
+    from age_rt import CHUNK_SIZE, DecodeError
+
+    # Standard chunk size, so the stream carries the plain age identifier
+    encoder = AgeEncoder.from_passphrase(passphrase)
+    wire = encoder.get_header() + encoder._emit(b"x" * CHUNK_SIZE, False) + encoder._emit(b"", True)
+    with pytest.raises(DecodeError, match="empty final chunk"):
+        list(iter_decode_callable(io.BytesIO(wire).read, AgeAutoDecoder(passphrase)))
+
+
+def test_age_decoder_accepts_sole_empty_chunk(passphrase):
+    encoder = AgeEncoder.from_passphrase(passphrase)
+    wire = encoder.get_header() + encoder.encode_chunk(b"", is_final=True)
+    # A sole empty chunk is the marker of an empty payload, not a message
+    assert list(iter_decode_callable(io.BytesIO(wire).read, AgeDecoder(passphrase))) == []

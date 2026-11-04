@@ -70,7 +70,7 @@ encrypted = encode_bytes([b"Hello", b"World"], encoder)
 
 # age-rt decode
 for chunk in decode_bytes(encrypted, AgeRTDecoder("my-secret")):
-    print(chunk)  # b"Hello", b"World", b""
+    print(chunk)  # b"Hello", b"World"
 
 # auto-detecting decode (works for both age v1 and age-rt)
 for chunk in decode_bytes(encrypted, AgeAutoDecoder("my-secret")):
@@ -108,15 +108,15 @@ passphrase = "my-secret-passphrase"
 plaintext_chunks = [b"Hello", b"World", b"!"]
 
 # Encode to file
-with open("encrypted.age", "wb") as f:
+with open("encrypted.age-rt", "wb") as f:
     encode_file(plaintext_chunks, f, AgeRTEncoder.from_passphrase(passphrase))
 
 # Decode from file
-with open("encrypted.age", "rb") as f:
+with open("encrypted.age-rt", "rb") as f:
     decoded_chunks = list(decode_file(f, AgeRTDecoder(passphrase)))
 
-# Note: decoded_chunks includes the final empty chunk
-assert decoded_chunks == plaintext_chunks + [b""]
+# The end-of-stream marker is not yielded
+assert decoded_chunks == plaintext_chunks
 ```
 
 ### In-Memory Encoding/Decoding
@@ -129,7 +129,7 @@ plaintext_chunks = [b"Chunk1", b"Chunk2", b"Chunk3"]
 
 encrypted = encode_bytes(plaintext_chunks, AgeRTEncoder.from_passphrase(passphrase))
 decoded_chunks = list(decode_bytes(encrypted, AgeRTDecoder(passphrase)))
-assert decoded_chunks == plaintext_chunks + [b""]
+assert decoded_chunks == plaintext_chunks
 ```
 
 ### Iterator-Based Encoding
@@ -153,7 +153,7 @@ for wire_chunk in iter_encode_chunks(plaintext_chunks, encoder):
 ```python
 from age_rt import AgeAutoDecoder, iter_decode_callable
 
-with open("unknown.age", "rb") as f:
+with open("unknown.bin", "rb") as f:
     for chunk in iter_decode_callable(f.read, AgeAutoDecoder("secret")):
         process(chunk)
 ```
@@ -208,7 +208,7 @@ from age_rt import (
 )
 
 try:
-    with open("encrypted.age", "rb") as f:
+    with open("encrypted.age-rt", "rb") as f:
         for chunk in decode_file(f, AgeRTDecoder(passphrase)):
             process(chunk)
 except ChunkAuthenticationError:
@@ -229,7 +229,7 @@ except HeaderParseError:
 iter_encode_chunks(chunks: Iterable[bytes], encoder: AgeRTEncoder | AgeEncoder) -> Iterator[bytes]
 ```
 
-Encode chunks as an iterator, appending an empty final chunk automatically if the stream has not already been finalized.
+Encode chunks as an iterator, terminating the stream if it has not already been finalized. For age-rt, the iterator appends an empty final chunk as the end-of-stream marker, so each chunk can be encoded and flushed immediately without look-ahead or caching. The encoder itself does not require it: `AgeRTEncoder.encode_chunk(data, is_final=True)` writes a valid non-empty final chunk, and decoders accept both. `AgeEncoder` does not encrypt an empty final chunk (standard age forbids it unless the whole payload is empty); its empty final chunk only promotes the held-back chunk to final. The decode iterators do not yield this marker (see [Decoding Functions](#decoding-functions)).
 
 **Args:**
 - `chunks`: Iterable of plaintext chunks
@@ -272,7 +272,7 @@ Decode from a synchronous read function.
 
 **Example:**
 ```python
-with open('encrypted.age', 'rb') as f:
+with open('encrypted.age-rt', 'rb') as f:
     for chunk in iter_decode_callable(f.read, AgeRTDecoder("secret")):
         print(chunk)
 ```
@@ -307,6 +307,8 @@ async aiter_decode_chunks(data_source: AsyncIterable[bytes], decoder: AgeRTDecod
 
 Async version of `iter_decode_chunks()`.
 
+> **Breaking:** decode iterators do not yield the end-of-stream marker. A final empty chunk is a marker, not a message: the age-rt encode iterators append it so that no chunk has to be held back (a non-empty final chunk is equally valid), and it is the sole chunk of an empty age payload. Empty non-final chunks (age-rt heartbeats) are still yielded. Code that relied on a trailing `b""` must drop that assumption. For age-rt, `iter_decode(iter_encode(chunks))` now returns exactly `chunks`; for age, a trailing `b""` input is the end marker and is not returned. An empty payload decodes to no chunks. The low-level `decoder.feed()` still returns the empty final chunk; `decoder.is_done()` is the end-of-stream signal.
+
 ---
 
 ### Convenience Wrappers
@@ -319,7 +321,7 @@ Encode chunks to a file-like object.
 
 **Example:**
 ```python
-with open('data.age', 'wb') as f:
+with open('data.age-rt', 'wb') as f:
     encode_file([b'chunk1', b'chunk2'], f, AgeRTEncoder.from_passphrase("secret"))
 ```
 
@@ -389,7 +391,9 @@ Create a standard age v1 encoder. Uses a fixed 16-byte file key and fixed chunk 
 
 **Instance methods:** same as `AgeRTEncoder` — `get_header()`, `encode_chunk()`, `finalized`.
 
-`encode_chunk` with `is_final=None` (default) auto-detects: a short chunk is automatically the final chunk.
+`encode_chunk` with `is_final=None` (default) auto-detects: a short chunk is automatically the final chunk. A full chunk is never auto-final: end the stream with `is_final=True` (on the last chunk, or on an empty chunk).
+
+⚠️ **`AgeEncoder` return values are not aligned with input chunks.** Since age v1.1.0, an empty final chunk is only valid for an empty payload, so a full chunk can only be encrypted once it is known whether it is the last one. The encoder holds back one full chunk: the first call returns `b""`, later calls return the previous chunk, and the final call may return two chunks joined. Only concatenate the return values. An empty final chunk is never encrypted (except for an empty payload), it just promotes the held-back chunk to final. The ciphertext stream itself is standard age. If you need one output message per input message, use age-rt.
 
 ---
 
@@ -432,7 +436,7 @@ while (wanted := decoder.bytes_wanted) and (data := source.read(wanted)):
 AgeDecoder(passphrase: str, chunk_size: int = 65536)
 ```
 
-Stateful push-based decoder for standard age v1 streams. Identical interface to `AgeRTDecoder`. During the data phase `bytes_wanted` is `chunk_size + 16`; a short read signals the final chunk.
+Stateful push-based decoder for standard age v1 streams. Identical interface to `AgeRTDecoder`. During the data phase `bytes_wanted` is `chunk_size + 16`; a short read signals the final chunk. The decoder is strict about age v1.1.0: an empty final chunk after a non-empty payload raises `DecodeError`. Streams written through the iterators by age-rt ≤ 0.2.2 whose non-empty payload is a multiple of `chunk_size` carry such a chunk and are rejected, as they are by current age and rage. To read such old files, use age-rt 0.2.2 or age v1.0.0.
 
 ⚠️ **The `chunk_size` parameter is for internal/testing use only.** Use the default (65536) for standard age v1 streams.
 
@@ -487,12 +491,15 @@ Encoders use `from_passphrase()` rather than direct instantiation:
 
 The core decoder is synchronous; `feed()` returns `bytes | None`, not a coroutine. Async support is provided by thin async generator wrappers (`aiter_decode_callable`, `aiter_decode_chunks`, `aiter_encode_chunks`).
 
-### Empty Chunks Are Preserved
+### Empty Chunks and the End-of-Stream Marker
 
-The decoder yields the final empty chunk emitted e.g. by `iter_encode_chunks()`:
+A **final empty chunk is the end-of-stream marker, not a message**. The encode iterators write one for age-rt, and it is the sole chunk of an empty age payload. Decode iterators do not yield it, so an empty payload decodes to no chunks.
 
-- **Transparent**: Decoder preserves all chunks the encoder sent
-- **Application choice**: Filter if needed: `(c for c in decode_bytes(...) if c)`
+Empty **non-final** chunks are real messages (age-rt heartbeats) and are preserved:
+
+- **Transparent**: every message the encoder sent is yielded
+- **Heartbeats survive**: `[b"a", b"", b"b"]` round-trips unchanged
+- **Low-level access**: `decoder.feed()` still returns the final empty chunk; `decoder.is_done()` is the end-of-stream signal
 
 ## Testing
 

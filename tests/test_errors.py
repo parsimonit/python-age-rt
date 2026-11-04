@@ -186,7 +186,7 @@ def test_special_utf8_passphrase():
     # Should encode and decode correctly
     wire = age_rt_encode(chunks, special_passphrase)
     decoded = list(iter_decode_callable(io.BytesIO(wire).read, AgeRTDecoder(special_passphrase)))
-    assert decoded == chunks + [b""]
+    assert decoded == chunks
 
     # Wrong passphrase should still fail
     with pytest.raises(ChunkAuthenticationError):
@@ -200,7 +200,7 @@ def test_very_long_passphrase():
 
     wire = age_rt_encode(chunks, long_passphrase)
     decoded = list(iter_decode_callable(io.BytesIO(wire).read, AgeRTDecoder(long_passphrase)))
-    assert decoded == chunks + [b""]
+    assert decoded == chunks
 
 
 def test_chunk_index_many_chunks(passphrase):
@@ -211,6 +211,6 @@ def test_chunk_index_many_chunks(passphrase):
     wire = age_rt_encode(chunks, passphrase)
     decoded = list(iter_decode_callable(io.BytesIO(wire).read, AgeRTDecoder(passphrase)))
 
-    # Should get all chunks plus final empty
-    assert decoded == chunks + [b""]
-    assert len(decoded) == 1001
+    # Should get all chunks; the end-of-stream marker is not yielded
+    assert decoded == chunks
+    assert len(decoded) == 1000

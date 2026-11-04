@@ -17,26 +17,29 @@ Wire format:
 
 Example (encoding):
     # Simple: encode to file
-    with open('data.age', 'wb') as f:
-        encode_file([b"chunk1", b"chunk2"], f, "secret")
+    with open("data.age-rt", "wb") as f:
+        encode_file([b"chunk1", b"chunk2"], f, AgeRTEncoder.from_passphrase("secret"))
 
     # Or: iterate over wire chunks
-    for wire_chunk in iter_encode_chunks([b"chunk1", b"chunk2"], "secret"):
+    encoder = AgeRTEncoder.from_passphrase("secret")
+    for wire_chunk in iter_encode_chunks([b"chunk1", b"chunk2"], encoder):
         output.write(wire_chunk)
 
 Example (decoding):
     # Simple: decode from file
-    with open('data.age', 'rb') as f:
-        for plaintext in decode_file(f, "secret"):
+    with open("data.age-rt", "rb") as f:
+        for plaintext in decode_file(f, AgeRTDecoder("secret")):
             process(plaintext)
 
     # Or: decode from read function
-    with open("data.age", "rb") as f:
-        for plaintext in iter_decode_callable(f.read, "secret"):
+    with open("data.age-rt", "rb") as f:
+        for plaintext in iter_decode_callable(f.read, AgeRTDecoder("secret")):
             process(plaintext)
 
 Example (async decoding):
-    async for plaintext in aiter_decode_callable(reader.read_fixed_block, "secret"):
+    async for plaintext in aiter_decode_callable(
+        reader.read_fixed_block, AgeRTDecoder("secret")
+    ):
         await process(plaintext)
 
 Requires: cryptography>=41.0.0
@@ -60,6 +63,7 @@ from typing import (
     Callable,
     Iterable,
     Iterator,
+    TypeGuard,
 )
 
 from cryptography.hazmat.primitives import hashes
@@ -752,6 +756,14 @@ class AgeEncoder:
     Produces raw age v1 ciphertext (no length-prefixed chunks).
     File key is 16 bytes; non-final chunks must be exactly CHUNK_SIZE bytes.
 
+    Since age v1.1.0 an empty final chunk is only valid as the sole chunk of an empty
+    payload. A full chunk can only be encrypted once it is known whether it is the last
+    one, so the encoder holds back one full chunk. Return values are therefore not aligned
+    with the input chunks: the first full chunk returns b"", later calls return the
+    previous chunk, and finalizing may return two chunks joined. Only concatenate them.
+    An empty final chunk is a pure end-of-stream marker and is never encrypted, unless
+    the payload is empty. The stream is incomplete until a final chunk is encoded.
+
     Do not instantiate directly. Use factory methods:
     - AgeEncoder.from_passphrase("secret")
     """
@@ -778,6 +790,7 @@ class AgeEncoder:
         self._nonce = os.urandom(16)
         self._cipher = ChaCha20Poly1305(_derive_payload_key(_file_key, self._nonce))
         self._chunk_index = 0
+        self._pending: bytes | None = None
         self._finalized = False
 
     @classmethod
@@ -830,9 +843,13 @@ class AgeEncoder:
                      chunks < chunk_size are automatically marked as final.
                      If True, chunk must be ≤ chunk_size.
                      If False, chunk must be exactly chunk_size.
+                     A full chunk is not auto-final: pass is_final=True (or end the
+                     stream with an empty final chunk) if it is the last one.
 
         Returns:
-            Raw ciphertext (plaintext + 16-byte AEAD tag); no length prefix.
+            Raw ciphertext (plaintext + 16-byte AEAD tag); no length prefix. May be empty
+            or hold two chunks; see the class docstring. An empty final chunk promotes the
+            held-back chunk to final and is not encrypted itself (unless payload is empty).
 
         Raises:
             RuntimeError: If stream already finalized
@@ -841,22 +858,44 @@ class AgeEncoder:
         if self._finalized:
             raise RuntimeError("Stream already finalized")
 
+        # A chunk may be held back: copy buffer-like input so a reused buffer can't alter it
+        if not isinstance(plaintext, bytes):
+            plaintext = bytes(memoryview(plaintext))
+
         # Auto-detect: short chunks are final
         if is_final is None:
             is_final = len(plaintext) < self._chunk_size
 
-        # Validate chunk size
+        # Validate chunk size (before touching any state)
         if not is_final and len(plaintext) != self._chunk_size:
             raise ValueError(f"Non-final chunks must be exactly {self._chunk_size} bytes")
         if is_final and len(plaintext) > self._chunk_size:
             raise ValueError(f"Chunk too large: {len(plaintext)} > {self._chunk_size}")
 
+        if not is_final:
+            # A full chunk may turn out to be the last one: hold it back.
+            out = self._emit(self._pending, False) if self._pending is not None else b""
+            self._pending = plaintext
+            return out
+
+        pending = self._pending
+        if not plaintext:
+            # Empty final chunk is a pure end-of-stream marker: it promotes the pending
+            # chunk to final. It is only encrypted as the sole chunk of an empty payload.
+            out = self._emit(pending if pending is not None else b"", True)
+        else:
+            out = self._emit(pending, False) if pending is not None else b""
+            out += self._emit(plaintext, True)
+        self._pending = None
+        self._finalized = True
+        return out
+
+    def _emit(self, plaintext: bytes, is_final: bool) -> bytes:
+        """Encrypt one chunk with the next chunk index."""
         ciphertext = self._cipher.encrypt(
             _make_aead_nonce(self._chunk_index, is_final), plaintext, None
         )
         self._chunk_index += 1
-        if is_final:
-            self._finalized = True
         return ciphertext
 
 
@@ -951,6 +990,8 @@ class AgeDecoder:
             InsufficientDataError: If data is empty or too large
             HeaderParseError: If header is invalid
             ChunkAuthenticationError: If chunk authentication fails
+            DecodeError: If the stream ends with an empty chunk after a non-empty payload
+                (invalid since age v1.1.0)
         """
         if not data:
             raise InsufficientDataError("Cannot feed empty bytes")
@@ -1005,12 +1046,16 @@ class AgeDecoder:
                 plaintext = self._cipher.decrypt(
                     _make_aead_nonce(self._chunk_index, True), ciphertext, None
                 )
-                self._chunk_index += 1
-                self._state = AgeDecoder._State.DONE
-                self._bytes_wanted = 0
-                return plaintext
             except Exception as e:
                 raise ChunkAuthenticationError(f"Auth failed at chunk {self._chunk_index}: {e}")
+
+            # age v1.1.0: an empty final chunk is only valid as the sole chunk
+            if not plaintext and self._chunk_index > 0:
+                raise DecodeError("Invalid age stream: empty final chunk after non-empty payload")
+            self._chunk_index += 1
+            self._state = AgeDecoder._State.DONE
+            self._bytes_wanted = 0
+            return plaintext
 
         elif self._state == AgeDecoder._State.DONE:
             raise RuntimeError("Decoder already complete")
@@ -1109,8 +1154,12 @@ def iter_encode_chunks(
     - AgeRTEncoder: any chunk size
     - AgeEncoder: non-final chunks must be exactly CHUNK_SIZE bytes (unless using auto-detect)
 
-    Appends an empty final chunk only if the stream has not already been finalized.
-    For AgeEncoder with auto-detect, a short chunk will automatically finalize the stream.
+    Terminates the stream with an empty final chunk if it has not been finalized yet.
+    For AgeRTEncoder this iterator appends it as the end-of-stream marker, which lets every
+    chunk be encoded and flushed immediately (a non-empty final chunk via is_final=True is
+    equally valid). AgeEncoder never encrypts it (it just promotes the held-back chunk to
+    final), unless the payload is empty. For AgeEncoder, a short chunk automatically
+    finalizes the stream.
 
     Args:
         chunks: Iterable of plaintext chunks
@@ -1126,7 +1175,8 @@ def iter_encode_chunks(
     """
     yield encoder.get_header()
     for chunk in chunks:
-        yield encoder.encode_chunk(chunk)
+        if wire := encoder.encode_chunk(chunk):  # AgeEncoder defers output, may be empty
+            yield wire
     if not encoder.finalized:
         yield encoder.encode_chunk(b"", is_final=True)
 
@@ -1147,9 +1197,24 @@ async def aiter_encode_chunks(
     """
     yield encoder.get_header()
     async for chunk in chunks:
-        yield encoder.encode_chunk(chunk)
+        if wire := encoder.encode_chunk(chunk):  # AgeEncoder defers output, may be empty
+            yield wire
     if not encoder.finalized:
         yield encoder.encode_chunk(b"", is_final=True)
+
+
+def _is_message(
+    result: bytes | None,
+    decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
+) -> TypeGuard[bytes]:
+    """
+    Whether a feed() result is a message for the caller of a decode iterator.
+
+    An empty final chunk is the end-of-stream marker, not a message: it is written by the
+    encode iterators of age-rt and is the sole chunk of an empty age payload. Empty
+    non-final chunks (e.g. age-rt heartbeats) are messages and are kept.
+    """
+    return result is not None and (bool(result) or not decoder.is_done())
 
 
 def iter_decode_callable(
@@ -1167,7 +1232,10 @@ def iter_decode_callable(
         decoder: A pre-constructed AgeRTDecoder or AgeDecoder instance
 
     Yields:
-        Decrypted plaintext chunks
+        Decrypted plaintext chunks. An empty final chunk is the end-of-stream marker
+        (written by the encode iterators) and is not yielded. Empty non-final chunks
+        (age-rt heartbeats) are yielded. Use decoder.feed() directly for the marker;
+        decoder.is_done() is the end-of-stream signal.
 
     Raises:
         StreamTruncatedError: If read returns empty bytes before decoding is done
@@ -1175,7 +1243,7 @@ def iter_decode_callable(
         ChunkAuthenticationError: If a chunk fails authentication
 
     Example:
-        >>> with open('encrypted.age', 'rb') as f:
+        >>> with open('encrypted.age-rt', 'rb') as f:
         ...     for chunk in iter_decode_callable(f.read, AgeRTDecoder("secret")):
         ...         print(chunk)
     """
@@ -1183,7 +1251,7 @@ def iter_decode_callable(
         data = read_func(decoder.bytes_wanted)
         if not data:
             raise StreamTruncatedError("Stream ended unexpectedly")
-        if (result := decoder.feed(data)) is not None:
+        if _is_message(result := decoder.feed(data), decoder):
             yield result
 
 
@@ -1199,7 +1267,10 @@ async def aiter_decode_callable(
         decoder: A pre-constructed AgeRTDecoder or AgeDecoder instance
 
     Yields:
-        Decrypted plaintext chunks
+        Decrypted plaintext chunks. An empty final chunk is the end-of-stream marker
+        (written by the encode iterators) and is not yielded. Empty non-final chunks
+        (age-rt heartbeats) are yielded. Use decoder.feed() directly for the marker;
+        decoder.is_done() is the end-of-stream signal.
 
     Raises:
         StreamTruncatedError: If read returns empty bytes before decoding is done
@@ -1210,7 +1281,7 @@ async def aiter_decode_callable(
         data = await read_func(decoder.bytes_wanted)
         if not data:
             raise StreamTruncatedError("Stream ended unexpectedly")
-        if (result := decoder.feed(data)) is not None:
+        if _is_message(result := decoder.feed(data), decoder):
             yield result
 
 
@@ -1269,7 +1340,10 @@ def iter_decode_chunks(
         decoder: A pre-constructed AgeRTDecoder, AgeDecoder, or AgeAutoDecoder instance
 
     Yields:
-        Decrypted plaintext chunks
+        Decrypted plaintext chunks. An empty final chunk is the end-of-stream marker
+        (written by the encode iterators) and is not yielded. Empty non-final chunks
+        (age-rt heartbeats) are yielded. Use decoder.feed() directly for the marker;
+        decoder.is_done() is the end-of-stream signal.
 
     Raises:
         StreamTruncatedError: If source is exhausted before decoding is done
@@ -1287,7 +1361,7 @@ def iter_decode_chunks(
             except StopIteration:
                 source_exhausted = True
         result = _feed_decoder_from_buffer(buffer, decoder, source_exhausted)
-        if result is not None:
+        if _is_message(result, decoder):
             yield result
 
     if buffer:
@@ -1320,7 +1394,10 @@ async def aiter_decode_chunks(
         decoder: A pre-constructed AgeRTDecoder, AgeDecoder, or AgeAutoDecoder instance
 
     Yields:
-        Decrypted plaintext chunks
+        Decrypted plaintext chunks. An empty final chunk is the end-of-stream marker
+        (written by the encode iterators) and is not yielded. Empty non-final chunks
+        (age-rt heartbeats) are yielded. Use decoder.feed() directly for the marker;
+        decoder.is_done() is the end-of-stream signal.
 
     Raises:
         StreamTruncatedError: If source is exhausted before decoding is done
@@ -1338,7 +1415,7 @@ async def aiter_decode_chunks(
             except StopAsyncIteration:
                 source_exhausted = True
         result = _feed_decoder_from_buffer(buffer, decoder, source_exhausted)
-        if result is not None:
+        if _is_message(result, decoder):
             yield result
 
     if buffer:
@@ -1366,7 +1443,7 @@ def encode_file(
     Encode chunks to a file-like object.
 
     Example:
-        >>> with open('data.age', 'wb') as f:
+        >>> with open('data.age-rt', 'wb') as f:
         ...     encode_file([b'chunk1', b'chunk2'], f, AgeRTEncoder.from_passphrase("secret"))
     """
     for wire_chunk in iter_encode_chunks(chunks, encoder):
@@ -1397,7 +1474,7 @@ def decode_file(
     Decode from a file-like object.
 
     Example:
-        >>> with open('data.age', 'rb') as f:
+        >>> with open('data.age-rt', 'rb') as f:
         ...     for chunk in decode_file(f, AgeRTDecoder("secret")):
         ...         print(chunk)
     """
