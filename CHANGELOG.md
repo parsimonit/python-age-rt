@@ -6,6 +6,8 @@ changes in minor and patch versions.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
 ### Changed
 
 - **Breaking:** the decode iterators and helpers (`decode_file`, `decode_bytes`,
@@ -63,7 +65,8 @@ Initial release.
 - Sync and async iterator APIs.
 - Fully type-hinted (PEP 561, `py.typed`).
 
-[Unreleased]: https://github.com/parsimonit/python-age-rt/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/parsimonit/python-age-rt/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/parsimonit/python-age-rt/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/parsimonit/python-age-rt/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/parsimonit/python-age-rt/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/parsimonit/python-age-rt/compare/v0.1.0...v0.2.0
