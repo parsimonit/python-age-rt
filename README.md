@@ -108,11 +108,11 @@ passphrase = "my-secret-passphrase"
 plaintext_chunks = [b"Hello", b"World", b"!"]
 
 # Encode to file
-with open("encrypted.age", "wb") as f:
+with open("encrypted.age-rt", "wb") as f:
     encode_file(plaintext_chunks, f, AgeRTEncoder.from_passphrase(passphrase))
 
 # Decode from file
-with open("encrypted.age", "rb") as f:
+with open("encrypted.age-rt", "rb") as f:
     decoded_chunks = list(decode_file(f, AgeRTDecoder(passphrase)))
 
 # Note: decoded_chunks includes the final empty chunk
@@ -153,7 +153,7 @@ for wire_chunk in iter_encode_chunks(plaintext_chunks, encoder):
 ```python
 from age_rt import AgeAutoDecoder, iter_decode_callable
 
-with open("unknown.age", "rb") as f:
+with open("unknown.bin", "rb") as f:
     for chunk in iter_decode_callable(f.read, AgeAutoDecoder("secret")):
         process(chunk)
 ```
@@ -208,7 +208,7 @@ from age_rt import (
 )
 
 try:
-    with open("encrypted.age", "rb") as f:
+    with open("encrypted.age-rt", "rb") as f:
         for chunk in decode_file(f, AgeRTDecoder(passphrase)):
             process(chunk)
 except ChunkAuthenticationError:
@@ -272,7 +272,7 @@ Decode from a synchronous read function.
 
 **Example:**
 ```python
-with open('encrypted.age', 'rb') as f:
+with open('encrypted.age-rt', 'rb') as f:
     for chunk in iter_decode_callable(f.read, AgeRTDecoder("secret")):
         print(chunk)
 ```
@@ -319,7 +319,7 @@ Encode chunks to a file-like object.
 
 **Example:**
 ```python
-with open('data.age', 'wb') as f:
+with open('data.age-rt', 'wb') as f:
     encode_file([b'chunk1', b'chunk2'], f, AgeRTEncoder.from_passphrase("secret"))
 ```
 

@@ -17,26 +17,29 @@ Wire format:
 
 Example (encoding):
     # Simple: encode to file
-    with open('data.age', 'wb') as f:
-        encode_file([b"chunk1", b"chunk2"], f, "secret")
+    with open("data.age-rt", "wb") as f:
+        encode_file([b"chunk1", b"chunk2"], f, AgeRTEncoder.from_passphrase("secret"))
 
     # Or: iterate over wire chunks
-    for wire_chunk in iter_encode_chunks([b"chunk1", b"chunk2"], "secret"):
+    encoder = AgeRTEncoder.from_passphrase("secret")
+    for wire_chunk in iter_encode_chunks([b"chunk1", b"chunk2"], encoder):
         output.write(wire_chunk)
 
 Example (decoding):
     # Simple: decode from file
-    with open('data.age', 'rb') as f:
-        for plaintext in decode_file(f, "secret"):
+    with open("data.age-rt", "rb") as f:
+        for plaintext in decode_file(f, AgeRTDecoder("secret")):
             process(plaintext)
 
     # Or: decode from read function
-    with open("data.age", "rb") as f:
-        for plaintext in iter_decode_callable(f.read, "secret"):
+    with open("data.age-rt", "rb") as f:
+        for plaintext in iter_decode_callable(f.read, AgeRTDecoder("secret")):
             process(plaintext)
 
 Example (async decoding):
-    async for plaintext in aiter_decode_callable(reader.read_fixed_block, "secret"):
+    async for plaintext in aiter_decode_callable(
+        reader.read_fixed_block, AgeRTDecoder("secret")
+    ):
         await process(plaintext)
 
 Requires: cryptography>=41.0.0
@@ -1175,7 +1178,7 @@ def iter_decode_callable(
         ChunkAuthenticationError: If a chunk fails authentication
 
     Example:
-        >>> with open('encrypted.age', 'rb') as f:
+        >>> with open('encrypted.age-rt', 'rb') as f:
         ...     for chunk in iter_decode_callable(f.read, AgeRTDecoder("secret")):
         ...         print(chunk)
     """
@@ -1366,7 +1369,7 @@ def encode_file(
     Encode chunks to a file-like object.
 
     Example:
-        >>> with open('data.age', 'wb') as f:
+        >>> with open('data.age-rt', 'wb') as f:
         ...     encode_file([b'chunk1', b'chunk2'], f, AgeRTEncoder.from_passphrase("secret"))
     """
     for wire_chunk in iter_encode_chunks(chunks, encoder):
@@ -1397,7 +1400,7 @@ def decode_file(
     Decode from a file-like object.
 
     Example:
-        >>> with open('data.age', 'rb') as f:
+        >>> with open('data.age-rt', 'rb') as f:
         ...     for chunk in decode_file(f, AgeRTDecoder("secret")):
         ...         print(chunk)
     """
