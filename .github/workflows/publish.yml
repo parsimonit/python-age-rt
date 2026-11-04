@@ -11,13 +11,13 @@ permissions:
 jobs:
   build:
     name: Build distribution
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: "latest"
       
@@ -28,7 +28,7 @@ jobs:
         run: uv build
       
       - name: Store distribution packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-package-distributions
           path: dist/
@@ -36,14 +36,14 @@ jobs:
   publish-to-pypi:
     name: Publish to PyPI
     needs: [build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: release
       url: https://pypi.org/p/age-rt
     
     steps:
       - name: Download distribution packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python-package-distributions
           path: dist/
@@ -54,13 +54,13 @@ jobs:
   upload-to-release:
     name: Upload artifacts to GitHub Release
     needs: [build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     
     steps:
       - name: Download distribution packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python-package-distributions
           path: dist/
