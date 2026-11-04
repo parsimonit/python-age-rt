@@ -547,26 +547,13 @@ Currently a single-file module (`age_rt.py`) for easy integration. Future versio
 
 ## Release Notes
 
-### v0.1.0 (Initial Release)
-
-**First public release** of age-rt Python implementation.
-
-**Features:**
-- age-rt v0.2 streaming encryption with variable-length chunks
-- Full age v1 standard format support
-- Passphrase-based encryption (scrypt key derivation)
-- Auto-detecting decoder for both formats
-- Sync and async iterator APIs
-- Fully type-hinted (PEP 561 compatible with py.typed marker)
-- Comprehensive test suite (65 tests, 90%+ coverage)
+See [CHANGELOG.md](CHANGELOG.md) for the history of changes, and the [GitHub releases page](https://github.com/parsimonit/python-age-rt/releases) for published releases.
 
 **Limitations:**
 - Passphrase mode only (no public key support yet)
 - Single-file module (no internal package structure)
 
 **Security Note:** This implementation has not been independently audited. Use at your own risk.
-
-See the [GitHub releases page](https://github.com/parsimonit/python-age-rt/releases) for future updates.
 
 ## Contributing
 

@@ -31,7 +31,7 @@ dependencies = [
 Repository = "https://github.com/parsimonit/python-age-rt"
 Documentation = "https://github.com/parsimonit/python-age-rt#readme"
 Issues = "https://github.com/parsimonit/python-age-rt/issues"
-Changelog = "https://github.com/parsimonit/python-age-rt/releases"
+Changelog = "https://github.com/parsimonit/python-age-rt/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
