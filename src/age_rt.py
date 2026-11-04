@@ -63,6 +63,7 @@ from typing import (
     Callable,
     Iterable,
     Iterator,
+    TypeGuard,
 )
 
 from cryptography.hazmat.primitives import hashes
@@ -1202,6 +1203,20 @@ async def aiter_encode_chunks(
         yield encoder.encode_chunk(b"", is_final=True)
 
 
+def _is_message(
+    result: bytes | None,
+    decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
+) -> TypeGuard[bytes]:
+    """
+    Whether a feed() result is a message for the caller of a decode iterator.
+
+    An empty final chunk is the end-of-stream marker, not a message: it is written by the
+    encode iterators of age-rt and is the sole chunk of an empty age payload. Empty
+    non-final chunks (e.g. age-rt heartbeats) are messages and are kept.
+    """
+    return result is not None and (bool(result) or not decoder.is_done())
+
+
 def iter_decode_callable(
     read_func: Callable[[int], bytes],
     decoder: "AgeRTDecoder | AgeDecoder | AgeAutoDecoder",
@@ -1217,7 +1232,10 @@ def iter_decode_callable(
         decoder: A pre-constructed AgeRTDecoder or AgeDecoder instance
 
     Yields:
-        Decrypted plaintext chunks
+        Decrypted plaintext chunks. An empty final chunk is the end-of-stream marker
+        (written by the encode iterators) and is not yielded. Empty non-final chunks
+        (age-rt heartbeats) are yielded. Use decoder.feed() directly for the marker;
+        decoder.is_done() is the end-of-stream signal.
 
     Raises:
         StreamTruncatedError: If read returns empty bytes before decoding is done
@@ -1233,7 +1251,7 @@ def iter_decode_callable(
         data = read_func(decoder.bytes_wanted)
         if not data:
             raise StreamTruncatedError("Stream ended unexpectedly")
-        if (result := decoder.feed(data)) is not None:
+        if _is_message(result := decoder.feed(data), decoder):
             yield result
 
 
@@ -1249,7 +1267,10 @@ async def aiter_decode_callable(
         decoder: A pre-constructed AgeRTDecoder or AgeDecoder instance
 
     Yields:
-        Decrypted plaintext chunks
+        Decrypted plaintext chunks. An empty final chunk is the end-of-stream marker
+        (written by the encode iterators) and is not yielded. Empty non-final chunks
+        (age-rt heartbeats) are yielded. Use decoder.feed() directly for the marker;
+        decoder.is_done() is the end-of-stream signal.
 
     Raises:
         StreamTruncatedError: If read returns empty bytes before decoding is done
@@ -1260,7 +1281,7 @@ async def aiter_decode_callable(
         data = await read_func(decoder.bytes_wanted)
         if not data:
             raise StreamTruncatedError("Stream ended unexpectedly")
-        if (result := decoder.feed(data)) is not None:
+        if _is_message(result := decoder.feed(data), decoder):
             yield result
 
 
@@ -1319,7 +1340,10 @@ def iter_decode_chunks(
         decoder: A pre-constructed AgeRTDecoder, AgeDecoder, or AgeAutoDecoder instance
 
     Yields:
-        Decrypted plaintext chunks
+        Decrypted plaintext chunks. An empty final chunk is the end-of-stream marker
+        (written by the encode iterators) and is not yielded. Empty non-final chunks
+        (age-rt heartbeats) are yielded. Use decoder.feed() directly for the marker;
+        decoder.is_done() is the end-of-stream signal.
 
     Raises:
         StreamTruncatedError: If source is exhausted before decoding is done
@@ -1337,7 +1361,7 @@ def iter_decode_chunks(
             except StopIteration:
                 source_exhausted = True
         result = _feed_decoder_from_buffer(buffer, decoder, source_exhausted)
-        if result is not None:
+        if _is_message(result, decoder):
             yield result
 
     if buffer:
@@ -1370,7 +1394,10 @@ async def aiter_decode_chunks(
         decoder: A pre-constructed AgeRTDecoder, AgeDecoder, or AgeAutoDecoder instance
 
     Yields:
-        Decrypted plaintext chunks
+        Decrypted plaintext chunks. An empty final chunk is the end-of-stream marker
+        (written by the encode iterators) and is not yielded. Empty non-final chunks
+        (age-rt heartbeats) are yielded. Use decoder.feed() directly for the marker;
+        decoder.is_done() is the end-of-stream signal.
 
     Raises:
         StreamTruncatedError: If source is exhausted before decoding is done
@@ -1388,7 +1415,7 @@ async def aiter_decode_chunks(
             except StopAsyncIteration:
                 source_exhausted = True
         result = _feed_decoder_from_buffer(buffer, decoder, source_exhausted)
-        if result is not None:
+        if _is_message(result, decoder):
             yield result
 
     if buffer:

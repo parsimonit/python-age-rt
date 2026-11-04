@@ -209,7 +209,8 @@ def test_age_encoder_empty_payload_is_single_empty_chunk(passphrase):
     for push in ([(b"", None)], [(b"", True)]):
         header, body, _ = _encode_age_pushed(passphrase, push)
         assert len(body) == _TAG
-        assert _decode_age(passphrase, header, body) == [b""]
+        # The sole empty chunk is the end-of-stream marker, not a decoded message
+        assert _decode_age(passphrase, header, body) == []
 
 
 def test_age_encoder_output_is_deferred_by_one_chunk(passphrase):

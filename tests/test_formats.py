@@ -120,7 +120,7 @@ def test_roundtrip_with_custom_identifiers(passphrase):
 
     decoder_rt = AgeRTDecoder(passphrase, max_chunk_size=custom_max)
     recovered_rt = list(iter_decode_callable(io.BytesIO(wire_rt).read, decoder_rt))
-    assert recovered_rt == rt_chunks + [b""]
+    assert recovered_rt == rt_chunks
 
 
 def test_identifier_parameter_validation():

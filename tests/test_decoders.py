@@ -81,7 +81,7 @@ def test_empty_chunk(passphrase):
     output.seek(0)
     decoded = list(iter_decode_callable(output.read, AgeRTDecoder(passphrase)))
 
-    assert decoded == [b"Data", b""]
+    assert decoded == [b"Data"]
 
 
 def test_stateful_decoder(passphrase, sample_chunks):
@@ -104,7 +104,8 @@ def test_stateful_decoder(passphrase, sample_chunks):
         if result is not None:
             decoded.append(result)
 
-    # iter_encode_chunks adds a final empty chunk, so decoded should be chunks + [b'']
+    # iter_encode_chunks terminates the stream with an empty final chunk; direct feed() still
+    # returns it (is_done() is the signal), and the low-level loop above appends it.
     assert decoded == sample_chunks + [b""]
 
 
@@ -172,7 +173,7 @@ def test_age_auto_decoder_age_rt(passphrase, sample_chunks):
     encoder = AgeRTEncoder.from_passphrase(passphrase)
     wire = b"".join(iter_encode_chunks(sample_chunks, encoder))
     recovered = list(iter_decode_callable(io.BytesIO(wire).read, AgeAutoDecoder(passphrase)))
-    assert recovered == sample_chunks + [b""]
+    assert recovered == sample_chunks
 
 
 def test_age_auto_decoder_unknown_identifier(passphrase):
@@ -261,4 +262,5 @@ def test_age_auto_decoder_rejects_empty_final_chunk_after_payload(passphrase):
 def test_age_decoder_accepts_sole_empty_chunk(passphrase):
     encoder = AgeEncoder.from_passphrase(passphrase)
     wire = encoder.get_header() + encoder.encode_chunk(b"", is_final=True)
-    assert list(iter_decode_callable(io.BytesIO(wire).read, AgeDecoder(passphrase))) == [b""]
+    # A sole empty chunk is the marker of an empty payload, not a message
+    assert list(iter_decode_callable(io.BytesIO(wire).read, AgeDecoder(passphrase))) == []

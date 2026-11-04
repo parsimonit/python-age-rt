@@ -27,8 +27,8 @@ def test_encode_file_decode_file_age_rt(passphrase, sample_chunks):
     output.seek(0)
     decoded = list(decode_file(output, AgeRTDecoder(passphrase)))
 
-    # encode_file uses iter_encode_chunks which adds empty final chunk
-    assert decoded == sample_chunks + [b""]
+    # encode_file terminates the stream with the end-of-stream marker, which is not yielded
+    assert decoded == sample_chunks
 
 
 def test_encode_file_decode_file_age_v1(passphrase, large_chunk):
@@ -55,7 +55,7 @@ def test_encode_bytes_decode_bytes_age_rt(passphrase, sample_chunks):
 
     # Decode from bytes
     decoded = list(decode_bytes(encrypted, AgeRTDecoder(passphrase)))
-    assert decoded == sample_chunks + [b""]
+    assert decoded == sample_chunks
 
 
 def test_encode_bytes_decode_bytes_age_v1(passphrase):
@@ -77,7 +77,7 @@ def test_encode_bytes_decode_bytes_auto_decoder(passphrase, sample_chunks):
     # Encode with age-rt
     encrypted_rt = encode_bytes(sample_chunks, AgeRTEncoder.from_passphrase(passphrase))
     decoded_rt = list(decode_bytes(encrypted_rt, AgeAutoDecoder(passphrase)))
-    assert decoded_rt == sample_chunks + [b""]
+    assert decoded_rt == sample_chunks
 
     # Encode with age v1
     plaintext = b"test data"
@@ -98,7 +98,7 @@ def test_decode_file_with_real_file_operations(passphrase, sample_chunks, tmp_pa
     with open(file_path, "rb") as f:
         decoded = list(decode_file(f, AgeRTDecoder(passphrase)))
 
-    assert decoded == sample_chunks + [b""]
+    assert decoded == sample_chunks
 
 
 def test_encode_bytes_empty_chunks(passphrase):
@@ -107,8 +107,8 @@ def test_encode_bytes_empty_chunks(passphrase):
     encrypted = encode_bytes([], AgeRTEncoder.from_passphrase(passphrase))
 
     decoded = list(decode_bytes(encrypted, AgeRTDecoder(passphrase)))
-    # Should get just the final empty chunk
-    assert decoded == [b""]
+    # The sole empty chunk is the end-of-stream marker and is not yielded
+    assert decoded == []
 
 
 def test_decode_bytes_wrong_passphrase(passphrase, passphrase_wrong, sample_chunks):
@@ -140,5 +140,5 @@ def test_encode_file_large_chunks(passphrase, tmp_path):
     with open(file_path, "rb") as f:
         decoded = list(decode_file(f, AgeRTDecoder(passphrase, max_chunk_size=max_chunk_size)))
 
-    # Remove final empty chunk for comparison
-    assert b"".join(decoded[:-1]) == b"".join(chunks)
+    # The end-of-stream marker is not yielded
+    assert b"".join(decoded) == b"".join(chunks)

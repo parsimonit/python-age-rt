@@ -29,8 +29,8 @@ def test_iter_encode_chunks(passphrase):
     output.seek(0)
     decoded = list(iter_decode_callable(output.read, AgeRTDecoder(passphrase)))
 
-    # iter_encode_chunks adds a final empty chunk, so decoded should be chunks + [b'']
-    assert decoded == chunks + [b""]
+    # The final empty chunk is the end-of-stream marker, not a message.
+    assert decoded == chunks
 
 
 def test_iter_decode_chunks_age_rt(passphrase, sample_chunks):
@@ -40,13 +40,13 @@ def test_iter_decode_chunks_age_rt(passphrase, sample_chunks):
 
     # Decode from single chunk
     decoded = list(iter_decode_chunks([wire], AgeRTDecoder(passphrase)))
-    assert decoded == sample_chunks + [b""]
+    assert decoded == sample_chunks
 
     # Decode from multiple wire chunks (simulate network packets)
     chunk_size = 100
     wire_chunks = [wire[i : i + chunk_size] for i in range(0, len(wire), chunk_size)]
     decoded2 = list(iter_decode_chunks(wire_chunks, AgeRTDecoder(passphrase)))
-    assert decoded2 == sample_chunks + [b""]
+    assert decoded2 == sample_chunks
 
 
 def test_iter_decode_chunks_age_v1(passphrase):
@@ -107,7 +107,7 @@ def test_iter_decode_chunks_auto_decoder_age_rt(passphrase, sample_chunks):
     blob_size = 50
     blobs = [wire[i : i + blob_size] for i in range(0, len(wire), blob_size)]
     decoded = list(iter_decode_chunks(blobs, AgeAutoDecoder(passphrase)))
-    assert decoded == sample_chunks + [b""]
+    assert decoded == sample_chunks
 
 
 def test_iter_decode_chunks_auto_decoder_age_v1(passphrase, large_chunk):
@@ -130,7 +130,7 @@ def test_iter_decode_chunks_partial_feeds(passphrase):
     # Feed 1 byte at a time
     wire_chunks = [bytes([b]) for b in wire]
     decoded = list(iter_decode_chunks(wire_chunks, AgeRTDecoder(passphrase)))
-    assert decoded == chunks + [b""]
+    assert decoded == chunks
 
 
 def test_iter_decode_chunks_empty_input(passphrase):
@@ -182,3 +182,22 @@ def test_iter_decode_chunks_zero_length_non_final(passphrase):
     wire = output.getvalue()
     decoded = list(iter_decode_chunks([wire], AgeRTDecoder(passphrase)))
     assert decoded == [b"", b"data"]
+
+
+def test_iter_encode_chunks_age_rt_heartbeat_roundtrip(passphrase):
+    """An empty non-final chunk (heartbeat) survives; the end-of-stream marker does not."""
+    chunks = [b"a", b"", b"b", b""]
+    wire = b"".join(iter_encode_chunks(chunks, AgeRTEncoder.from_passphrase(passphrase)))
+
+    decoded = list(iter_decode_chunks([wire], AgeRTDecoder(passphrase)))
+    assert decoded == chunks
+
+
+def test_iter_encode_chunks_empty_payload_decodes_to_nothing(passphrase):
+    """An empty payload round-trips to no chunks for both age-rt and age."""
+    for encoder, decoder in (
+        (AgeRTEncoder.from_passphrase(passphrase), AgeRTDecoder(passphrase)),
+        (AgeEncoder.from_passphrase(passphrase), AgeDecoder(passphrase)),
+    ):
+        wire = b"".join(iter_encode_chunks([], encoder))
+        assert list(iter_decode_chunks([wire], decoder)) == []
