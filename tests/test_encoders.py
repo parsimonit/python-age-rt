@@ -157,3 +157,139 @@ def test_encoder_chunk_at_exact_boundary(passphrase):
     decoder = AgeRTDecoder(passphrase, max_chunk_size=max_size)
     recovered = list(iter_decode_callable(io.BytesIO(full_wire).read, decoder))
     assert recovered == [exact_chunk]
+
+
+# ============================================================================
+# AgeEncoder: no empty final chunk in non-empty payloads (age >= v1.1.0)
+# ============================================================================
+
+_SMALL = 16  # small chunk_size keeps these tests fast; real streams use CHUNK_SIZE
+_TAG = 16
+
+
+def _encode_age_pushed(passphrase, pushes, chunk_size=_SMALL):
+    """Push (plaintext, is_final) pairs; return (header, body, per-call outputs)."""
+    encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=chunk_size)
+    outputs = [encoder.encode_chunk(p, f) for p, f in pushes]
+    return encoder.get_header(), b"".join(outputs), outputs
+
+
+def _decode_age(passphrase, header, body, chunk_size=_SMALL):
+    from age_rt import AgeDecoder, iter_decode_callable
+
+    decoder = AgeDecoder(passphrase, chunk_size=chunk_size)
+    return list(iter_decode_callable(io.BytesIO(header + body).read, decoder))
+
+
+@pytest.mark.parametrize("n_chunks", [1, 2, 3])
+@pytest.mark.parametrize("terminator", ["empty_auto", "empty_final", "full_final"])
+def test_age_encoder_full_last_chunk_has_no_empty_chunk(passphrase, n_chunks, terminator):
+    """Payload that is a multiple of chunk_size is exactly n_chunks chunks long."""
+    chunks = [bytes([i]) * _SMALL for i in range(n_chunks)]
+    if terminator == "full_final":
+        pushes = [(c, None) for c in chunks[:-1]] + [(chunks[-1], True)]
+    elif terminator == "empty_final":
+        pushes = [(c, None) for c in chunks] + [(b"", True)]
+    else:
+        pushes = [(c, None) for c in chunks] + [(b"", None)]
+
+    header, body, _ = _encode_age_pushed(passphrase, pushes)
+
+    assert len(body) == n_chunks * (_SMALL + _TAG)
+    assert _decode_age(passphrase, header, body) == chunks
+
+
+def test_age_encoder_short_last_chunk_unchanged(passphrase):
+    header, body, _ = _encode_age_pushed(passphrase, [(b"a" * _SMALL, None), (b"b" * 5, None)])
+    assert len(body) == (_SMALL + _TAG) + (5 + _TAG)
+    assert _decode_age(passphrase, header, body) == [b"a" * _SMALL, b"b" * 5]
+
+
+def test_age_encoder_empty_payload_is_single_empty_chunk(passphrase):
+    for push in ([(b"", None)], [(b"", True)]):
+        header, body, _ = _encode_age_pushed(passphrase, push)
+        assert len(body) == _TAG
+        assert _decode_age(passphrase, header, body) == [b""]
+
+
+def test_age_encoder_output_is_deferred_by_one_chunk(passphrase):
+    """First full chunk returns b'', later ones lag by one, finalizing joins at most two."""
+    full = b"x" * _SMALL
+    _, _, outputs = _encode_age_pushed(passphrase, [(full, None), (full, None), (b"tail", None)])
+    sizes = [len(o) for o in outputs]
+    assert sizes == [0, _SMALL + _TAG, (_SMALL + _TAG) + (4 + _TAG)]
+
+    _, _, outputs = _encode_age_pushed(passphrase, [(full, None), (full, True)])
+    assert [len(o) for o in outputs] == [0, 2 * (_SMALL + _TAG)]
+
+    _, _, outputs = _encode_age_pushed(passphrase, [(full, None), (b"", True)])
+    assert [len(o) for o in outputs] == [0, _SMALL + _TAG]
+
+
+def test_age_encoder_empty_final_after_chunk_finalizes(passphrase):
+    encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=_SMALL)
+    encoder.encode_chunk(b"x" * _SMALL)
+    assert not encoder.finalized
+    encoder.encode_chunk(b"")
+    assert encoder.finalized
+    with pytest.raises(RuntimeError, match="already finalized"):
+        encoder.encode_chunk(b"x" * _SMALL)
+
+
+def test_age_encoder_validation_does_not_change_state(passphrase):
+    encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=_SMALL)
+    encoder.encode_chunk(b"x" * _SMALL)
+    with pytest.raises(ValueError):
+        encoder.encode_chunk(b"short", is_final=False)
+    with pytest.raises(ValueError):
+        encoder.encode_chunk(b"x" * (_SMALL + 1), is_final=True)
+    assert not encoder.finalized
+    out = encoder.encode_chunk(b"", is_final=True)
+    assert len(out) == _SMALL + _TAG
+
+
+def test_age_iter_encode_chunks_multiple_of_chunk_size(passphrase):
+    from age_rt import encode_bytes
+
+    for n in (1, 2):
+        encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=_SMALL)
+        chunks = [bytes([i + 1]) * _SMALL for i in range(n)]
+        wire = encode_bytes(chunks, encoder)
+        body = wire[len(encoder.get_header()) :]
+        assert len(body) == n * (_SMALL + _TAG)
+        assert _decode_age(passphrase, encoder.get_header(), body) == chunks
+
+    # Empty input stream: the one case where an empty chunk is valid
+    encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=_SMALL)
+    wire = encode_bytes([], encoder)
+    assert len(wire) - len(encoder.get_header()) == _TAG
+
+    # A trailing empty input chunk is just the terminator
+    encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=_SMALL)
+    wire = encode_bytes([b"x" * _SMALL, b""], encoder)
+    assert len(wire) - len(encoder.get_header()) == _SMALL + _TAG
+
+
+def test_age_encoder_copies_reused_buffer(passphrase):
+    """A held-back chunk must not alias a caller buffer that is overwritten afterwards."""
+    buf = bytearray(_SMALL)
+    encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=_SMALL)
+    outputs = []
+    for fill in (b"A", b"B"):
+        buf[:] = fill * _SMALL
+        outputs.append(encoder.encode_chunk(memoryview(buf)))
+    buf[:3] = b"CCC"
+    outputs.append(encoder.encode_chunk(memoryview(buf)[:3], is_final=True))
+
+    decoded = _decode_age(passphrase, encoder.get_header(), b"".join(outputs))
+    assert decoded == [b"A" * _SMALL, b"B" * _SMALL, b"CCC"]
+
+
+def test_age_encoder_failed_finalize_leaves_state_intact(passphrase):
+    encoder = AgeEncoder.from_passphrase(passphrase, chunk_size=_SMALL)
+    encoder.encode_chunk(b"x" * _SMALL)
+    with pytest.raises(TypeError):
+        encoder.encode_chunk("abc")  # type: ignore[arg-type]
+    assert not encoder.finalized
+    out = encoder.encode_chunk(b"", is_final=True)
+    assert len(out) == _SMALL + _TAG

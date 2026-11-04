@@ -755,6 +755,14 @@ class AgeEncoder:
     Produces raw age v1 ciphertext (no length-prefixed chunks).
     File key is 16 bytes; non-final chunks must be exactly CHUNK_SIZE bytes.
 
+    Since age v1.1.0 an empty final chunk is only valid as the sole chunk of an empty
+    payload. A full chunk can only be encrypted once it is known whether it is the last
+    one, so the encoder holds back one full chunk. Return values are therefore not aligned
+    with the input chunks: the first full chunk returns b"", later calls return the
+    previous chunk, and finalizing may return two chunks joined. Only concatenate them.
+    An empty final chunk is a pure end-of-stream marker and is never encrypted, unless
+    the payload is empty. The stream is incomplete until a final chunk is encoded.
+
     Do not instantiate directly. Use factory methods:
     - AgeEncoder.from_passphrase("secret")
     """
@@ -781,6 +789,7 @@ class AgeEncoder:
         self._nonce = os.urandom(16)
         self._cipher = ChaCha20Poly1305(_derive_payload_key(_file_key, self._nonce))
         self._chunk_index = 0
+        self._pending: bytes | None = None
         self._finalized = False
 
     @classmethod
@@ -833,9 +842,13 @@ class AgeEncoder:
                      chunks < chunk_size are automatically marked as final.
                      If True, chunk must be ≤ chunk_size.
                      If False, chunk must be exactly chunk_size.
+                     A full chunk is not auto-final: pass is_final=True (or end the
+                     stream with an empty final chunk) if it is the last one.
 
         Returns:
-            Raw ciphertext (plaintext + 16-byte AEAD tag); no length prefix.
+            Raw ciphertext (plaintext + 16-byte AEAD tag); no length prefix. May be empty
+            or hold two chunks; see the class docstring. An empty final chunk promotes the
+            held-back chunk to final and is not encrypted itself (unless payload is empty).
 
         Raises:
             RuntimeError: If stream already finalized
@@ -844,22 +857,44 @@ class AgeEncoder:
         if self._finalized:
             raise RuntimeError("Stream already finalized")
 
+        # A chunk may be held back: copy buffer-like input so a reused buffer can't alter it
+        if not isinstance(plaintext, bytes):
+            plaintext = bytes(memoryview(plaintext))
+
         # Auto-detect: short chunks are final
         if is_final is None:
             is_final = len(plaintext) < self._chunk_size
 
-        # Validate chunk size
+        # Validate chunk size (before touching any state)
         if not is_final and len(plaintext) != self._chunk_size:
             raise ValueError(f"Non-final chunks must be exactly {self._chunk_size} bytes")
         if is_final and len(plaintext) > self._chunk_size:
             raise ValueError(f"Chunk too large: {len(plaintext)} > {self._chunk_size}")
 
+        if not is_final:
+            # A full chunk may turn out to be the last one: hold it back.
+            out = self._emit(self._pending, False) if self._pending is not None else b""
+            self._pending = plaintext
+            return out
+
+        pending = self._pending
+        if not plaintext:
+            # Empty final chunk is a pure end-of-stream marker: it promotes the pending
+            # chunk to final. It is only encrypted as the sole chunk of an empty payload.
+            out = self._emit(pending if pending is not None else b"", True)
+        else:
+            out = self._emit(pending, False) if pending is not None else b""
+            out += self._emit(plaintext, True)
+        self._pending = None
+        self._finalized = True
+        return out
+
+    def _emit(self, plaintext: bytes, is_final: bool) -> bytes:
+        """Encrypt one chunk with the next chunk index."""
         ciphertext = self._cipher.encrypt(
             _make_aead_nonce(self._chunk_index, is_final), plaintext, None
         )
         self._chunk_index += 1
-        if is_final:
-            self._finalized = True
         return ciphertext
 
 
@@ -1112,8 +1147,12 @@ def iter_encode_chunks(
     - AgeRTEncoder: any chunk size
     - AgeEncoder: non-final chunks must be exactly CHUNK_SIZE bytes (unless using auto-detect)
 
-    Appends an empty final chunk only if the stream has not already been finalized.
-    For AgeEncoder with auto-detect, a short chunk will automatically finalize the stream.
+    Terminates the stream with an empty final chunk if it has not been finalized yet.
+    For AgeRTEncoder this iterator appends it as the end-of-stream marker, which lets every
+    chunk be encoded and flushed immediately (a non-empty final chunk via is_final=True is
+    equally valid). AgeEncoder never encrypts it (it just promotes the held-back chunk to
+    final), unless the payload is empty. For AgeEncoder, a short chunk automatically
+    finalizes the stream.
 
     Args:
         chunks: Iterable of plaintext chunks
@@ -1129,7 +1168,8 @@ def iter_encode_chunks(
     """
     yield encoder.get_header()
     for chunk in chunks:
-        yield encoder.encode_chunk(chunk)
+        if wire := encoder.encode_chunk(chunk):  # AgeEncoder defers output, may be empty
+            yield wire
     if not encoder.finalized:
         yield encoder.encode_chunk(b"", is_final=True)
 
@@ -1150,7 +1190,8 @@ async def aiter_encode_chunks(
     """
     yield encoder.get_header()
     async for chunk in chunks:
-        yield encoder.encode_chunk(chunk)
+        if wire := encoder.encode_chunk(chunk):  # AgeEncoder defers output, may be empty
+            yield wire
     if not encoder.finalized:
         yield encoder.encode_chunk(b"", is_final=True)
 

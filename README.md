@@ -229,7 +229,7 @@ except HeaderParseError:
 iter_encode_chunks(chunks: Iterable[bytes], encoder: AgeRTEncoder | AgeEncoder) -> Iterator[bytes]
 ```
 
-Encode chunks as an iterator, appending an empty final chunk automatically if the stream has not already been finalized.
+Encode chunks as an iterator, terminating the stream if it has not already been finalized. For age-rt, the iterator appends an empty final chunk as the end-of-stream marker, so each chunk can be encoded and flushed immediately without look-ahead or caching. The encoder itself does not require it: `AgeRTEncoder.encode_chunk(data, is_final=True)` writes a valid non-empty final chunk, and decoders accept both. `AgeEncoder` does not encrypt an empty final chunk (standard age forbids it unless the whole payload is empty); its empty final chunk only promotes the held-back chunk to final.
 
 **Args:**
 - `chunks`: Iterable of plaintext chunks
@@ -389,7 +389,9 @@ Create a standard age v1 encoder. Uses a fixed 16-byte file key and fixed chunk 
 
 **Instance methods:** same as `AgeRTEncoder` — `get_header()`, `encode_chunk()`, `finalized`.
 
-`encode_chunk` with `is_final=None` (default) auto-detects: a short chunk is automatically the final chunk.
+`encode_chunk` with `is_final=None` (default) auto-detects: a short chunk is automatically the final chunk. A full chunk is never auto-final: end the stream with `is_final=True` (on the last chunk, or on an empty chunk).
+
+⚠️ **`AgeEncoder` return values are not aligned with input chunks.** Since age v1.1.0, an empty final chunk is only valid for an empty payload, so a full chunk can only be encrypted once it is known whether it is the last one. The encoder holds back one full chunk: the first call returns `b""`, later calls return the previous chunk, and the final call may return two chunks joined. Only concatenate the return values. An empty final chunk is never encrypted (except for an empty payload), it just promotes the held-back chunk to final. The ciphertext stream itself is standard age. If you need one output message per input message, use age-rt.
 
 ---
 
