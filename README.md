@@ -434,7 +434,7 @@ while (wanted := decoder.bytes_wanted) and (data := source.read(wanted)):
 AgeDecoder(passphrase: str, chunk_size: int = 65536)
 ```
 
-Stateful push-based decoder for standard age v1 streams. Identical interface to `AgeRTDecoder`. During the data phase `bytes_wanted` is `chunk_size + 16`; a short read signals the final chunk.
+Stateful push-based decoder for standard age v1 streams. Identical interface to `AgeRTDecoder`. During the data phase `bytes_wanted` is `chunk_size + 16`; a short read signals the final chunk. The decoder is strict about age v1.1.0: an empty final chunk after a non-empty payload raises `DecodeError`. Streams written through the iterators by age-rt ≤ 0.2.2 whose non-empty payload is a multiple of `chunk_size` carry such a chunk and are rejected, as they are by current age and rage. To read such old files, use age-rt 0.2.2 or age v1.0.0.
 
 ⚠️ **The `chunk_size` parameter is for internal/testing use only.** Use the default (65536) for standard age v1 streams.
 

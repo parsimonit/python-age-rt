@@ -989,6 +989,8 @@ class AgeDecoder:
             InsufficientDataError: If data is empty or too large
             HeaderParseError: If header is invalid
             ChunkAuthenticationError: If chunk authentication fails
+            DecodeError: If the stream ends with an empty chunk after a non-empty payload
+                (invalid since age v1.1.0)
         """
         if not data:
             raise InsufficientDataError("Cannot feed empty bytes")
@@ -1043,12 +1045,16 @@ class AgeDecoder:
                 plaintext = self._cipher.decrypt(
                     _make_aead_nonce(self._chunk_index, True), ciphertext, None
                 )
-                self._chunk_index += 1
-                self._state = AgeDecoder._State.DONE
-                self._bytes_wanted = 0
-                return plaintext
             except Exception as e:
                 raise ChunkAuthenticationError(f"Auth failed at chunk {self._chunk_index}: {e}")
+
+            # age v1.1.0: an empty final chunk is only valid as the sole chunk
+            if not plaintext and self._chunk_index > 0:
+                raise DecodeError("Invalid age stream: empty final chunk after non-empty payload")
+            self._chunk_index += 1
+            self._state = AgeDecoder._State.DONE
+            self._bytes_wanted = 0
+            return plaintext
 
         elif self._state == AgeDecoder._State.DONE:
             raise RuntimeError("Decoder already complete")
